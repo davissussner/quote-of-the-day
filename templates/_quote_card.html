@@ -1,0 +1,28 @@
+{% macro quote_card(day, heading) %}
+<article class="quote-card">
+  <p class="quote-date">{{ heading }} &middot; {{ day.date_label }}</p>
+  <blockquote class="quote-text">&ldquo;{{ day.text }}&rdquo;</blockquote>
+  <button class="play-btn" data-quote="{{ day.text }}">&#9654; Listen</button>
+
+  <p class="quote-sourcing">
+    Reported by {{ day.source_count }} outlet{{ 's' if day.source_count != 1 else '' }}:
+  </p>
+  <ul class="quote-sources">
+    {% for source in day.sources %}
+    <li><a href="{{ source.article_url }}" target="_blank" rel="noopener">{{ source.outlet }}</a>
+      {% if source.article_title %}&mdash; {{ source.article_title }}{% endif %}</li>
+    {% endfor %}
+  </ul>
+
+  {% if day.other_quotes %}
+  <details class="also-said">
+    <summary>Also reported that day</summary>
+    <ul>
+      {% for other in day.other_quotes %}
+      <li>&ldquo;{{ other.text }}&rdquo; <span class="muted">({{ other.source_count }} outlet{{ 's' if other.source_count != 1 else '' }})</span></li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+</article>
+{% endmacro %}

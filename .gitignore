@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Build output. Rebuilt from data/quotes.db by build_site.
+site/

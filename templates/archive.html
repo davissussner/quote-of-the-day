@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Archive &mdash; Quote of the Day{% endblock %}
+{% block content %}
+<section>
+  <h1>Archive</h1>
+  <ul class="archive-list archive-list--full">
+    {% for d in days %}
+    <li>
+      <a href="{{ d.page }}">{{ d.date_label }}</a>
+      <span class="archive-snippet">&ldquo;{{ d.text[:100] }}{{ '…' if d.text|length > 100 else '' }}&rdquo;</span>
+      <span class="muted">{{ d.source_count }} outlet{{ 's' if d.source_count != 1 else '' }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

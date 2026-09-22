@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "_quote_card.html" import quote_card %}
+{% block title %}Quote of the Day{% endblock %}
+{% block content %}
+<section class="hero">
+  {{ quote_card(day, "Today's quote") }}
+</section>
+
+{% if archive %}
+<section class="recent">
+  <h2>Recently</h2>
+  <ul class="archive-list">
+    {% for d in archive[:7] %}
+    <li>
+      <a href="{{ d.page }}">{{ d.date_label }}</a>
+      <span class="archive-snippet">&ldquo;{{ d.text[:80] }}{{ '…' if d.text|length > 80 else '' }}&rdquo;</span>
+    </li>
+    {% endfor %}
+  </ul>
+  <a class="see-all" href="archive.html">See the full archive &rarr;</a>
+</section>
+{% endif %}
+{% endblock %}

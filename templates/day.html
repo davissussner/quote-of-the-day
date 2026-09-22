@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% from "_quote_card.html" import quote_card %}
+{% block title %}{{ day.date_label }} &mdash; Quote of the Day{% endblock %}
+{% block content %}
+<section class="hero">
+  {% if not is_latest %}
+  <p class="archived-note"><a href="../index.html">&larr; Back to today's quote</a></p>
+  {% endif %}
+  {{ quote_card(day, "Quote of the day") }}
+</section>
+{% endblock %}

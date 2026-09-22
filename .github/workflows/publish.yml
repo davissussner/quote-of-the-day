@@ -1,0 +1,73 @@
+name: Fetch, build, and publish
+
+# Runs once a day: pulls today's candidate quotes, picks one, commits the
+# updated archive (data/quotes.db) back to main, then builds and deploys the
+# site. The archive is committed -- not regenerated on every run -- because
+# a day's pick depends on what NewsAPI had available at fetch time and can't
+# be recomputed later.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["data/quotes.db"]
+  schedule:
+    # 13:00 UTC, after the US morning news cycle has had time to publish.
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Fetch today's candidate quotes
+        env:
+          NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
+        run: uv run python -m quote_of_the_day.fetch
+
+      - name: Commit updated archive
+        run: |
+          git config user.name "quote-of-the-day-bot"
+          git config user.email "actions@github.com"
+          git add data/quotes.db
+          if ! git diff --cached --quiet; then
+            git commit -m "Add quote of the day"
+            git push
+          else
+            echo "No new quote today; nothing to commit."
+          fi
+
+      - name: Build site
+        run: uv run python -m quote_of_the_day.build_site --clean
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

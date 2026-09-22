@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Quote of the Day{% endblock %}</title>
+  <link rel="stylesheet" href="{{ depth }}style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="{{ depth }}index.html">Quote of the Day</a>
+    <nav>
+      <a href="{{ depth }}index.html">Today</a>
+      <a href="{{ depth }}archive.html">Archive</a>
+    </nav>
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <p>Every quote here is verbatim from a news article, attributed to the president by name
+       and a speech verb in the original text, with a link to that article so you can check it
+       yourself. The "listen" button plays it through your browser's built-in text-to-speech --
+       a synthetic, generic voice, not a recording or an impersonation of anyone's actual voice.</p>
+  </footer>
+
+  <script>
+    (function () {
+      const supported = "speechSynthesis" in window;
+      let activeBtn = null;
+
+      document.querySelectorAll(".play-btn").forEach(function (btn) {
+        if (!supported) {
+          btn.disabled = true;
+          btn.textContent = "Text-to-speech not supported in this browser";
+          return;
+        }
+        btn.addEventListener("click", function () {
+          if (activeBtn === btn) {
+            window.speechSynthesis.cancel();
+            reset(btn);
+            activeBtn = null;
+            return;
+          }
+          window.speechSynthesis.cancel();
+          if (activeBtn) reset(activeBtn);
+
+          const utterance = new SpeechSynthesisUtterance(btn.dataset.quote);
+          utterance.onend = function () { reset(btn); activeBtn = null; };
+          utterance.onerror = function () { reset(btn); activeBtn = null; };
+          btn.textContent = "⏸ Stop";
+          activeBtn = btn;
+          window.speechSynthesis.speak(utterance);
+        });
+      });
+
+      function reset(btn) { btn.textContent = "▶ Listen"; }
+    })();
+  </script>
+</body>
+</html>

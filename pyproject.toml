@@ -1,0 +1,21 @@
+[project]
+name = "quote-of-the-day"
+version = "0.1.0"
+description = "A daily, sourced quote from the sitting US president, read aloud by the browser's own text-to-speech"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27",
+    "jinja2>=3.1",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+fetch-quote = "quote_of_the_day.fetch:main"
+build-site = "quote_of_the_day.build_site:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["quote_of_the_day"]
