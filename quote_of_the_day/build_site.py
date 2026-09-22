@@ -32,21 +32,19 @@ def load_days(conn) -> list[dict]:
         ).fetchone()
         if not qotd_row:
             continue
-        sources = conn.execute(
-            "SELECT * FROM quote_sources WHERE quote_id = ? ORDER BY published_at",
-            (qotd_row["id"],),
-        ).fetchall()
         others = conn.execute(
             "SELECT * FROM quotes WHERE date = ? AND is_qotd = 0 "
-            "ORDER BY source_count DESC LIMIT 5", (date,),
+            "ORDER BY word_count DESC LIMIT 5", (date,),
         ).fetchall()
 
         days.append({
             "date": date,
             "date_label": pretty_date(date),
             "text": qotd_row["text"],
-            "source_count": qotd_row["source_count"],
-            "sources": [dict(s) for s in sources],
+            "speaker": qotd_row["speaker"],
+            "word_count": qotd_row["word_count"],
+            "transcript_title": qotd_row["transcript_title"],
+            "transcript_url": qotd_row["transcript_url"],
             "other_quotes": [dict(o) for o in others],
             "page": f"days/{date}.html",
         })

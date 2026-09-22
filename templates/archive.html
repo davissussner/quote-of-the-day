@@ -8,7 +8,7 @@
     <li>
       <a href="{{ d.page }}">{{ d.date_label }}</a>
       <span class="archive-snippet">&ldquo;{{ d.text[:100] }}{{ '…' if d.text|length > 100 else '' }}&rdquo;</span>
-      <span class="muted">{{ d.source_count }} outlet{{ 's' if d.source_count != 1 else '' }}</span>
+      <span class="muted">{{ d.word_count }} words</span>
     </li>
     {% endfor %}
   </ul>

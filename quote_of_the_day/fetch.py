@@ -1,16 +1,20 @@
-"""Stage 1 -- pull today's candidate quotes from the news and pick one.
+"""Stage 1 -- pull today's transcript(s) and pick the most rambling turn.
 
-Every quote stored here is text that appeared inside quotation marks in a
-real news article, next to the president's name and a speech verb ("said",
-"told", etc). Nothing is paraphrased or generated: the heuristic in
-`extract_quotes` decides what *counts* as a quote, but never changes the
-words. Every quote keeps a link back to the source article so a reader can
-check it themselves -- that link is the actual guarantee of accuracy, not
-the heuristic.
+Source is Rev.com's transcripts of the president's own speeches, rallies,
+and press events (https://www.rev.com/category/donald-trump). Rev
+transcribes every speaker turn verbatim, including asides, false starts,
+and tangents -- exactly the material a "quote of the day" made of soundbites
+would cut out.
 
-"Quote of the day" is the candidate reported, worded the same way, by the
-most distinct outlets that day. Ties break toward the most recently
-published.
+A transcript page is a sequence of <p> tags inside <div id="main-content">.
+A turn starts with a label paragraph like "Donald Trump (01:22): " (name,
+then a parenthesized timestamp link, then a colon, nothing else) and
+continues through every following paragraph until the next label paragraph.
+`TranscriptParser` below walks that structure directly; nothing is
+paraphrased or reworded -- the text stored is exactly what's between labels.
+
+"Quote of the day" is simply the president's longest qualifying turn that
+day -- the most rambling thing he said on the record, not the most quoted.
 """
 
 from __future__ import annotations
@@ -19,163 +23,198 @@ import argparse
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 
 import httpx
 from dotenv import load_dotenv
 
 from .db import connect
 
-NEWSAPI_URL = "https://newsapi.org/v2/everything"
+CATEGORY_URL = "https://www.rev.com/category/donald-trump"
+TRANSCRIPT_LINK_RE = re.compile(r'href="(/transcripts/[a-z0-9\-]+)"')
+DATE_PUBLISHED_RE = re.compile(r'"datePublished":\s*"(\d{4}-\d{2}-\d{2})')
+HEADLINE_RE = re.compile(r'"headline":\s*"((?:[^"\\]|\\.)*)"')
 
-# Straight or curly double quotes around 15-300 chars of inner text.
-QUOTE_RE = re.compile(r'[“"]([^"“”]{15,300})[”"]')
-SPEECH_VERB_RE = re.compile(r"\b(said|says|saying|wrote|writes|posted|told|tells|"
-                            r"tweeted|claimed|claims|added|continued|argued|insisted)\b",
-                            re.IGNORECASE)
+# A turn-label paragraph, once its own inner tags are stripped to plain text:
+# "Donald Trump (01:22): " or "Audience (00:52): " -- a name, a parenthesized
+# timestamp, a colon, and nothing else.
+LABEL_RE = re.compile(r"^([A-Za-z][A-Za-z .'\-]{1,40})\s*\(\s*\d{1,2}:\d{2}(?::\d{2})?\s*\)\s*:\s*$")
+# The same timestamp marker when it prefixes a continuation paragraph instead
+# of standing alone, e.g. "(00:52)God bless the USA." -- strip it, keep the text.
+LEADING_TIMESTAMP_RE = re.compile(r"^\(\s*\d{1,2}:\d{2}(?::\d{2})?\s*\)\s*")
 
-# NewsAPI truncates `content` on the free tier with a trailing marker like
-# "... [+1234 chars]" -- strip it so it can't be mistaken for article text.
-TRUNCATION_RE = re.compile(r"\s*\[\+\d+ chars\]\s*$")
-
-
-def _article_text(article: dict) -> str:
-    parts = [article.get("title") or "", article.get("description") or "",
-             TRUNCATION_RE.sub("", article.get("content") or "")]
-    return "\n".join(p for p in parts if p)
+MIN_WORDS = 50  # below this, a turn is a reaction, not a ramble
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; quote-of-the-day/0.1)"}
 
 
-def extract_quotes(text: str, president_name: str) -> list[str]:
-    """Quoted spans that sit near both the president's name and a speech verb.
+class TranscriptParser(HTMLParser):
+    """Collects the plain text of every <p> inside <div id="main-content">, in order."""
 
-    Both checks look within a fixed window of the quote rather than the
-    quote's own contents, so a quote never has to *mention* the president by
-    name to count -- it just has to be attributed to him in the surrounding
-    sentence.
-    """
-    name = president_name.lower()
-    found = []
-    for match in QUOTE_RE.finditer(text):
-        quote = re.sub(r"\s+", " ", match.group(1)).strip()
-        if len(quote) < 15:
+    def __init__(self):
+        super().__init__()
+        self.depth = 0
+        self.target_depth = None
+        self.in_p = False
+        self._buf: list[str] = []
+        self.paragraphs: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        self.depth += 1
+        if tag == "div" and self.target_depth is None and dict(attrs).get("id") == "main-content":
+            self.target_depth = self.depth
+        if self.target_depth is not None and tag == "p":
+            self.in_p = True
+            self._buf = []
+
+    def handle_endtag(self, tag):
+        if self.target_depth is not None and tag == "p" and self.in_p:
+            self.paragraphs.append("".join(self._buf).strip())
+            self.in_p = False
+        if tag == "div" and self.target_depth is not None and self.depth == self.target_depth:
+            self.target_depth = -1  # sentinel: already closed, never matches again
+        self.depth -= 1
+
+    def handle_data(self, data):
+        if self.in_p:
+            self._buf.append(data)
+
+
+def parse_turns(html: str) -> list[dict]:
+    """Group a transcript's paragraphs into (speaker, text) turns."""
+    parser = TranscriptParser()
+    parser.feed(html)
+
+    turns = []
+    speaker, buf = None, []
+    for para in parser.paragraphs:
+        label = LABEL_RE.match(para)
+        if label:
+            if speaker and buf:
+                turns.append({"speaker": speaker, "text": " ".join(buf).strip()})
+            speaker, buf = label.group(1).strip(), []
             continue
-        start, end = match.span()
-        wide = text[max(0, start - 200):end + 200].lower()
-        near = text[max(0, start - 60):start] + text[end:end + 60]
-        if name in wide and SPEECH_VERB_RE.search(near):
-            found.append(quote)
-    return found
+        cleaned = LEADING_TIMESTAMP_RE.sub("", para).strip()
+        if cleaned:
+            buf.append(cleaned)
+    if speaker and buf:
+        turns.append({"speaker": speaker, "text": " ".join(buf).strip()})
+    return turns
 
 
-def _normalize_key(quote: str) -> str:
-    return re.sub(r"\s+", " ", quote.strip().lower()).strip("\"'“” .,")
+def president_turns(turns: list[dict], president_name: str, min_words: int = MIN_WORDS) -> list[dict]:
+    name = president_name.lower()
+    out = []
+    for turn in turns:
+        if name not in turn["speaker"].lower():
+            continue
+        words = turn["text"].split()
+        if len(words) >= min_words:
+            out.append({**turn, "word_count": len(words)})
+    return out
 
 
-def fetch_articles(client: httpx.Client, api_key: str, president_name: str,
-                    from_date: str) -> list[dict]:
-    resp = client.get(NEWSAPI_URL, params={
-        "q": f'"{president_name}"',
-        "language": "en",
-        "sortBy": "publishedAt",
-        "pageSize": 100,
-        "from": from_date,
-        "apiKey": api_key,
-    }, timeout=30)
+def discover_transcript_urls(client: httpx.Client, limit: int = 20) -> list[str]:
+    resp = client.get(CATEGORY_URL, headers=HEADERS, timeout=30)
     resp.raise_for_status()
-    payload = resp.json()
-    if payload.get("status") != "ok":
-        raise RuntimeError(f"NewsAPI error: {payload.get('message', payload)}")
-    return payload.get("articles", [])
+    seen, urls = set(), []
+    for path in TRANSCRIPT_LINK_RE.findall(resp.text):
+        if path not in seen:
+            seen.add(path)
+            urls.append(f"https://www.rev.com{path}")
+        if len(urls) >= limit:
+            break
+    return urls
 
 
-def group_quotes(articles: list[dict], president_name: str) -> list[dict]:
-    """Dedupe near-identical quotes across articles, keeping every source."""
-    groups: dict[str, dict] = {}
-    for article in articles:
-        text = _article_text(article)
-        source_name = (article.get("source") or {}).get("name") or "Unknown outlet"
-        for quote in extract_quotes(text, president_name):
-            key = _normalize_key(quote)
-            group = groups.setdefault(key, {"text": quote, "sources": {}})
-            if len(quote) > len(group["text"]):
-                group["text"] = quote
-            # keyed by (outlet, url) so a re-run doesn't double-count a source
-            group["sources"][(source_name, article.get("url") or "")] = {
-                "outlet": source_name,
-                "article_title": article.get("title"),
-                "article_url": article.get("url"),
-                "published_at": article.get("publishedAt"),
-            }
-    return [
-        {"text": g["text"], "sources": list(g["sources"].values()),
-         "outlet_count": len({s["outlet"] for s in g["sources"].values()})}
-        for g in groups.values()
-    ]
+def fetch_transcript(client: httpx.Client, url: str) -> dict | None:
+    resp = client.get(url, headers=HEADERS, timeout=30)
+    resp.raise_for_status()
+    html = resp.text
 
-
-def choose_qotd(groups: list[dict]) -> dict | None:
-    if not groups:
+    date_match = DATE_PUBLISHED_RE.search(html)
+    if not date_match:
         return None
-    def sort_key(g):
-        latest = max((s["published_at"] or "" for s in g["sources"]), default="")
-        return (g["outlet_count"], latest)
-    return max(groups, key=sort_key)
+    headline_match = HEADLINE_RE.search(html)
+    headline = headline_match.group(1).encode().decode("unicode_escape") if headline_match else None
+
+    return {
+        "url": url,
+        "published_date": date_match.group(1),
+        "title": headline,
+        "turns": parse_turns(html),
+    }
 
 
-def store_day(conn, date: str, groups: list[dict], qotd_text: str | None) -> None:
+def choose_qotd(candidates: list[dict]) -> dict | None:
+    """The longest qualifying turn wins -- the most rambling thing said, full stop."""
+    if not candidates:
+        return None
+    return max(candidates, key=lambda c: c["word_count"])
+
+
+def store_day(conn, date: str, candidates: list[dict], qotd_text: str | None) -> None:
     now = datetime.now(timezone.utc).isoformat()
-    for group in groups:
-        cur = conn.execute(
-            "INSERT INTO quotes (date, text, is_qotd, source_count, first_seen_at) "
-            "VALUES (?, ?, ?, ?, ?) "
+    for c in candidates:
+        conn.execute(
+            "INSERT INTO quotes (date, speaker, text, word_count, is_qotd, "
+            "transcript_title, transcript_url, published_at, first_seen_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(date, text) DO UPDATE SET "
-            "source_count=excluded.source_count, is_qotd=excluded.is_qotd "
-            "RETURNING id",
-            (date, group["text"], 1 if group["text"] == qotd_text else 0,
-             group["outlet_count"], now),
+            "word_count=excluded.word_count, is_qotd=excluded.is_qotd",
+            (date, c["speaker"], c["text"], c["word_count"],
+             1 if c["text"] == qotd_text else 0,
+             c["transcript_title"], c["transcript_url"], c["published_date"], now),
         )
-        quote_id = cur.fetchone()[0]
-        for source in group["sources"]:
-            conn.execute(
-                "INSERT OR IGNORE INTO quote_sources "
-                "(quote_id, outlet, article_title, article_url, published_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (quote_id, source["outlet"], source["article_title"],
-                 source["article_url"], source["published_at"]),
-            )
     conn.commit()
 
 
 def main() -> None:
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Fetch today's candidate presidential quotes.")
+    parser = argparse.ArgumentParser(description="Fetch today's longest presidential ramble.")
     parser.add_argument("--date", default=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                         help="Date to file the pick under (YYYY-MM-DD). Default: today (UTC).")
+                         help="Target date to look for (YYYY-MM-DD). Default: today (UTC).")
     parser.add_argument("--lookback-days", type=int, default=1,
-                         help="How many days back to search for articles. Default: 1.")
+                         help="Also accept a transcript published up to this many days before "
+                              "--date, in case nothing was published exactly on it. Default: 1.")
+    parser.add_argument("--scan", type=int, default=20,
+                         help="How many of the most recent transcript pages to check. Default: 20.")
     args = parser.parse_args()
 
-    api_key = os.environ.get("NEWSAPI_KEY")
-    if not api_key:
-        raise SystemExit("NEWSAPI_KEY is not set. Copy .env.example to .env and fill it in.")
     president_name = os.environ.get("PRESIDENT_NAME", "Trump")
+    target = datetime.strptime(args.date, "%Y-%m-%d").date()
+    earliest = target - timedelta(days=args.lookback_days)
 
-    from_date = (datetime.now(timezone.utc) - timedelta(days=args.lookback_days)).strftime("%Y-%m-%d")
+    with httpx.Client(follow_redirects=True) as client:
+        urls = discover_transcript_urls(client, limit=args.scan)
+        candidates = []
+        checked_dates = []
+        for url in urls:
+            transcript = fetch_transcript(client, url)
+            if not transcript:
+                continue
+            pub_date = datetime.strptime(transcript["published_date"], "%Y-%m-%d").date()
+            checked_dates.append(pub_date)
+            if not (earliest <= pub_date <= target):
+                continue
+            for turn in president_turns(transcript["turns"], president_name):
+                candidates.append({**turn, "transcript_url": transcript["url"],
+                                    "transcript_title": transcript["title"],
+                                    "published_date": transcript["published_date"]})
 
-    with httpx.Client() as client:
-        articles = fetch_articles(client, api_key, president_name, from_date)
-
-    groups = group_quotes(articles, president_name)
-    if not groups:
-        print(f"No attributable quotes found in {len(articles)} articles for {args.date}. "
-              "Nothing written.")
+    if not candidates:
+        newest = max(checked_dates) if checked_dates else None
+        print(f"No qualifying {president_name} turns found for {args.date} "
+              f"(newest transcript checked: {newest}). Nothing written.")
         return
 
-    qotd = choose_qotd(groups)
+    qotd = choose_qotd(candidates)
     conn = connect()
-    store_day(conn, args.date, groups, qotd["text"])
+    store_day(conn, args.date, candidates, qotd["text"])
 
-    print(f"{args.date}: {len(articles)} articles, {len(groups)} distinct quotes.")
-    print(f"Quote of the day ({qotd['outlet_count']} outlets): {qotd['text']!r}")
+    print(f"{args.date}: {len(candidates)} qualifying turns across "
+          f"{len({c['transcript_url'] for c in candidates})} transcript(s).")
+    print(f"Quote of the day ({qotd['word_count']} words, from {qotd['transcript_title']!r}):")
+    print(f"  {qotd['text'][:200]}{'...' if len(qotd['text']) > 200 else ''}")
 
 
 if __name__ == "__main__":

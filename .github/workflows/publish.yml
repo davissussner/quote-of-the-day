@@ -1,10 +1,10 @@
 name: Fetch, build, and publish
 
-# Runs once a day: pulls today's candidate quotes, picks one, commits the
-# updated archive (data/quotes.db) back to main, then builds and deploys the
-# site. The archive is committed -- not regenerated on every run -- because
-# a day's pick depends on what NewsAPI had available at fetch time and can't
-# be recomputed later.
+# Runs once a day: scans Rev.com's Trump transcripts for that day's longest
+# turn, commits the updated archive (data/quotes.db) back to main, then
+# builds and deploys the site. The archive is committed -- not regenerated
+# on every run -- because which transcripts existed at fetch time can't be
+# recomputed later. No API key needed: Rev.com's transcripts are public pages.
 on:
   push:
     branches: [main]
@@ -37,10 +37,8 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Fetch today's candidate quotes
-        env:
-          NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
-        run: uv run python -m quote_of_the_day.fetch
+      - name: Fetch today's longest ramble
+        run: uv run python -m quote_of_the_day.fetch --lookback-days 2
 
       - name: Commit updated archive
         run: |
