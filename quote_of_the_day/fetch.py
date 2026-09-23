@@ -170,12 +170,13 @@ def store_day(conn, date: str, candidates: list[dict], qotd_text: str | None) ->
 
 def main() -> None:
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Fetch today's longest presidential ramble.")
+    parser = argparse.ArgumentParser(description="Fetch the longest presidential ramble per day.")
     parser.add_argument("--date", default=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                         help="Target date to look for (YYYY-MM-DD). Default: today (UTC).")
+                         help="Most recent day to consider (YYYY-MM-DD). Default: today (UTC).")
     parser.add_argument("--lookback-days", type=int, default=1,
-                         help="Also accept a transcript published up to this many days before "
-                              "--date, in case nothing was published exactly on it. Default: 1.")
+                         help="Also consider transcripts published up to this many days before "
+                              "--date -- each gets its OWN pick under its own real date, never "
+                              "relabeled as --date. Default: 1.")
     parser.add_argument("--scan", type=int, default=20,
                          help="How many of the most recent transcript pages to check. Default: 20.")
     args = parser.parse_args()
@@ -186,35 +187,41 @@ def main() -> None:
 
     with httpx.Client(follow_redirects=True) as client:
         urls = discover_transcript_urls(client, limit=args.scan)
-        candidates = []
+        by_date: dict[str, list] = {}
         checked_dates = []
         for url in urls:
             transcript = fetch_transcript(client, url)
             if not transcript:
                 continue
-            pub_date = datetime.strptime(transcript["published_date"], "%Y-%m-%d").date()
+            pub_date_str = transcript["published_date"]
+            pub_date = datetime.strptime(pub_date_str, "%Y-%m-%d").date()
             checked_dates.append(pub_date)
             if not (earliest <= pub_date <= target):
                 continue
-            for turn in president_turns(transcript["turns"], president_name):
-                candidates.append({**turn, "transcript_url": transcript["url"],
-                                    "transcript_title": transcript["title"],
-                                    "published_date": transcript["published_date"]})
+            turns = president_turns(transcript["turns"], president_name)
+            if not turns:
+                continue
+            by_date.setdefault(pub_date_str, []).extend(
+                {**turn, "transcript_url": transcript["url"],
+                 "transcript_title": transcript["title"],
+                 "published_date": pub_date_str}
+                for turn in turns
+            )
 
-    if not candidates:
+    if not by_date:
         newest = max(checked_dates) if checked_dates else None
-        print(f"No qualifying {president_name} turns found for {args.date} "
+        print(f"No qualifying {president_name} turns found between {earliest} and {target} "
               f"(newest transcript checked: {newest}). Nothing written.")
         return
 
-    qotd = choose_qotd(candidates)
     conn = connect()
-    store_day(conn, args.date, candidates, qotd["text"])
-
-    print(f"{args.date}: {len(candidates)} qualifying turns across "
-          f"{len({c['transcript_url'] for c in candidates})} transcript(s).")
-    print(f"Quote of the day ({qotd['word_count']} words, from {qotd['transcript_title']!r}):")
-    print(f"  {qotd['text'][:200]}{'...' if len(qotd['text']) > 200 else ''}")
+    for date, candidates in sorted(by_date.items()):
+        qotd = choose_qotd(candidates)
+        store_day(conn, date, candidates, qotd["text"])
+        print(f"{date}: {len(candidates)} qualifying turns across "
+              f"{len({c['transcript_url'] for c in candidates})} transcript(s).")
+        print(f"  Quote of the day ({qotd['word_count']} words, from {qotd['transcript_title']!r}):")
+        print(f"    {qotd['text'][:200]}{'...' if len(qotd['text']) > 200 else ''}")
 
 
 if __name__ == "__main__":
