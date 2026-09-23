@@ -85,9 +85,11 @@ main {
 }
 
 .play-btn {
+  display: block;
   font-family: inherit;
   font-size: 0.95rem;
   padding: 0.55rem 1.1rem;
+  margin-bottom: 1.25rem;
   border-radius: 999px;
   border: 1px solid var(--accent);
   background: transparent;

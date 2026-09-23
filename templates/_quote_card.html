@@ -1,8 +1,8 @@
 {% macro quote_card(day, heading) %}
 <article class="quote-card">
   <p class="quote-date">{{ heading }} &middot; {{ day.date_label }}</p>
-  <blockquote class="quote-text">&ldquo;{{ day.text }}&rdquo;</blockquote>
   <button class="play-btn" data-quote="{{ day.text }}">&#9654; Listen</button>
+  <blockquote class="quote-text">&ldquo;{{ day.text }}&rdquo;</blockquote>
 
   <p class="quote-sourcing">
     {{ day.word_count }} words, from
